@@ -1,0 +1,181 @@
+(function () {
+  let template = document.createElement("template");
+  template.innerHTML = `
+    <style>
+      :host {}
+
+      /* Style for the container */
+      div {
+        margin: 50px auto;
+        max-width: 600px;
+      }
+
+      /* Style for the input container */
+      .input-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+      }
+
+      /* Style for the input field */
+      #prompt-input {
+        padding: 10px;
+        font-size: 16px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        width: 70%;
+      }
+
+      /* Style for the button */
+      #generate-button {
+        padding: 10px;
+        font-size: 16px;
+        background-color: #3cb6a9;
+        color: #fff;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        width: 25%;
+      }
+
+      /* Style for the generated text area */
+      #generated-text {
+        padding: 10px;
+        font-size: 16px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        width:96%;
+      }
+    </style>
+    <div>
+      <center>
+        <img src="https://1000logos.net/wp-content/uploads/2023/02/ChatGPT-Emblem.png" width="200"/>
+        <h1>ChatGPT</h1>
+      </center>
+      <div class="input-container">
+        <input type="text" id="prompt-input" placeholder="Enter a prompt">
+        <button id="generate-button">Generate Text</button>
+      </div>
+      <textarea id="generated-text" rows="10" cols="50" readonly></textarea>
+    </div>
+  `;
+
+  class Widget extends HTMLElement {
+    constructor() {
+      super();
+      let shadowRoot = this.attachShadow({ mode: "open" });
+      shadowRoot.appendChild(template.content.cloneNode(true));
+      this._props = {}; // Initialisiere _props hier
+      this._generateButtonListener = null; // Um den Listener zu speichern
+    }
+
+    // Wird aufgerufen, wenn das Element dem DOM hinzugefügt wird
+    async connectedCallback() {
+      this.initMain();
+    }
+
+    // Wird aufgerufen, wenn sich Eigenschaften des Widgets ändern
+    onCustomWidgetBeforeUpdate(changedProperties) {
+      this._props = { ...this._props, ...changedProperties };
+    }
+
+    // Wird aufgerufen, nachdem Eigenschaften aktualisiert wurden
+    async onCustomWidgetAfterUpdate(changedProperties) {
+      // Re-initialisiere nur, wenn relevante Eigenschaften sich geändert haben
+      if (changedProperties.apiKey !== undefined || changedProperties.max_tokens !== undefined) {
+          this.initMain();
+      }
+    }
+
+    async initMain() {
+      const generatedText = this.shadowRoot.getElementById("generated-text");
+      generatedText.value = "";
+
+      // HIER ERFOLGT DIE ENTSCHEIDENDE ÄNDERUNG:
+      // Lies apiKey und max_tokens aus den übergebenen Properties (this._props)
+      // Die 'default'-Werte in der JSON stellen sicher, dass sie immer definiert sind.
+      const apiKey = this._props.apiKey;
+      const max_tokens = this._props.max_tokens;
+
+
+      const generateButton = this.shadowRoot.getElementById("generate-button");
+
+      // Entferne den alten Event Listener, falls vorhanden, um Mehrfachregistrierungen zu verhindern
+      if (this._generateButtonListener) {
+        generateButton.removeEventListener("click", this._generateButtonListener);
+      }
+
+      // Definiere den Event Listener
+      this._generateButtonListener = async () => {
+        const promptInput = this.shadowRoot.getElementById("prompt-input");
+        const currentGeneratedText = this.shadowRoot.getElementById("generated-text"); // Use a distinct variable
+        currentGeneratedText.value = "Finding result...";
+        const prompt = promptInput.value;
+
+        // Zusätzliche Validierung für den API Key
+        if (!apiKey || apiKey === "DEFAULT_API_KEY_FROM_JSON_IF_NEEDED") { // Falls du einen Platzhalter in der JSON hast
+            alert("API Key is missing or invalid. Please configure it in the widget properties.");
+            currentGeneratedText.value = "Error: API Key not configured.";
+            // Triggere ein Fehler-Event, falls gewünscht
+            this.dispatchEvent(new CustomEvent("onError", { detail: { message: "API Key is missing." } }));
+            return;
+        }
+
+        try {
+          const response = await fetch("https://api.openai.com/v1/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer " + apiKey // <-- Verwende den Wert aus den Properties
+            },
+            body: JSON.stringify({
+              "model": "text-davinci-002",
+              "prompt": prompt,
+              "max_tokens": parseInt(max_tokens), // <-- Verwende den Wert aus den Properties
+              "n": 1,
+              "temperature": 0.5
+            })
+          });
+
+          if (response.status === 200) {
+            const { choices } = await response.json();
+            const generatedTextValue = choices[0].text;
+            currentGeneratedText.value = generatedTextValue.replace(/^\n+/, '');
+            // Optional: Event auslösen, wenn der Chat erfolgreich erstellt wurde
+            this.dispatchEvent(new CustomEvent("onChatCreated", { detail: { message: "Chat response received." } }));
+          } else {
+            const error = await response.json();
+            alert("OpenAI Response: " + error.error.message);
+            currentGeneratedText.value = "";
+            // Optional: Fehler-Event auslösen
+            this.dispatchEvent(new CustomEvent("onError", { detail: { message: error.error.message } }));
+          }
+        } catch (e) {
+            console.error("Fetch error:", e);
+            alert("An error occurred during the API call: " + e.message);
+            currentGeneratedText.value = "Error: Could not connect to API.";
+            // Optional: Fehler-Event auslösen
+            this.dispatchEvent(new CustomEvent("onError", { detail: { message: e.message } }));
+        }
+      };
+
+      // Füge den neuen Event Listener hinzu
+      generateButton.addEventListener("click", this._generateButtonListener);
+    }
+
+    // Die Methode `createChat` aus der Haupt-JSON, falls sie von extern aufgerufen wird
+    createChat() {
+        // Diese Methode wird über die SAC-Skripting-API aufgerufen und könnte dann z.B.
+        // das Klicken des Buttons simulieren oder eine andere Logik starten.
+        // Für den ChatGPT-Anwendungsfall müsstest du überlegen, was "createChat" tun soll.
+        // Wenn es nur "Text generieren" ist, könntest du z.B. den Klick-Event des Buttons auslösen:
+        this.shadowRoot.getElementById("generate-button").click();
+        // Oder direkt die Logik aus dem Event-Listener aufrufen:
+        // this._generateButtonListener(); // Wenn es keine Prompt-Eingabe erfordert
+        this.shadowRoot.getElementById("output-message").textContent = "createChat method called!";
+    }
+  }
+
+  customElements.define("com-rohitchouhan-sap-chatgptwidget", Widget);
+})();
