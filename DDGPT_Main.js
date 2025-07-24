@@ -2,7 +2,7 @@
     let template = document.createElement("template");
     template.innerHTML = `
         <style>
-            /* Add your actual widget's CSS here */
+            /* Your actual widget's CSS here */
             :host {
                 display: block;
                 width: 100%;
@@ -10,6 +10,7 @@
                 font-family: Arial, sans-serif;
                 border: 1px solid #eee;
                 box-sizing: border-box;
+                padding: 10px; /* Added padding for better appearance */
             }
             #container {
                 display: flex;
@@ -22,9 +23,10 @@
                 padding: 10px;
                 background-color: #f9f9f9;
                 border-bottom: 1px solid #ddd;
+                border-radius: 5px;
+                margin-bottom: 10px;
             }
             #chat-input-area {
-                padding: 10px;
                 display: flex;
                 gap: 5px;
             }
@@ -46,7 +48,8 @@
                 background-color: #0056b3;
             }
             .message {
-                margin-bottom: 10px;
+                margin-bottom: 8px;
+                word-wrap: break-word; /* Prevents long words from breaking layout */
             }
             .user-message {
                 text-align: right;
@@ -55,6 +58,13 @@
             .api-message {
                 text-align: left;
                 color: #333;
+                background-color: #e9ecef;
+                padding: 5px;
+                border-radius: 5px;
+            }
+            .error-message {
+                color: red;
+                font-weight: bold;
             }
         </style>
         <div id="container">
@@ -66,42 +76,54 @@
         </div>
     `;
 
-    class DocumentDialogueWidget extends HTMLElement { // Renamed from BuilderWidget
+    class DocumentDialogueWidget extends HTMLElement {
         constructor() {
             super();
             this._shadowRoot = this.attachShadow({ mode: "open" });
             this._shadowRoot.appendChild(template.content.cloneNode(true));
 
-            this._props = {}; // To store the widget properties (apiKey, personaId etc.)
+            this._props = {}; // To store the widget properties
             this._chatOutput = this._shadowRoot.getElementById("chat-output");
             this._userInput = this._shadowRoot.getElementById("user-input");
             this._sendButton = this._shadowRoot.getElementById("send-button");
 
-            this._sendButton.addEventListener("click", this._sendMessage.bind(this));
-            this._userInput.addEventListener("keypress", (e) => {
-                if (e.key === "Enter") {
-                    this._sendMessage();
-                }
-            });
+            if (this._sendButton) {
+                this._sendButton.addEventListener("click", this._sendMessage.bind(this));
+            }
+            if (this._userInput) {
+                this._userInput.addEventListener("keypress", (e) => {
+                    if (e.key === "Enter") {
+                        this._sendMessage();
+                    }
+                });
+            }
+            console.log("DocumentDialogueWidget constructor finished.");
         }
 
-        // This method is called by SAC to pass the current properties of the widget
+        // SAC calls this to update properties
         onCustomWidgetBeforeUpdate(changedProperties) {
             this._props = { ...this._props, ...changedProperties };
             console.log("Main Widget Properties Updated:", this._props);
-            // You might want to re-initialize your chat logic if properties like API key change
         }
 
-        // This method is called by SAC after properties are updated
+        // SAC calls this after properties are updated
         onCustomWidgetAfterUpdate(changedProperties) {
-            // No specific UI update needed for the main widget usually, as it reacts to user input
+            // No specific UI updates needed here, properties are primarily used for API calls
         }
 
-        _addMessage(sender, message) {
+        _addMessage(sender, message, isError = false) {
             const msgDiv = document.createElement("div");
             msgDiv.classList.add("message");
-            msgDiv.classList.add(sender === "user" ? "user-message" : "api-message");
-            msgDiv.textContent = message;
+            if (sender === "user") {
+                msgDiv.classList.add("user-message");
+                msgDiv.textContent = `You: ${message}`;
+            } else {
+                msgDiv.classList.add("api-message");
+                msgDiv.textContent = `AI: ${message}`;
+            }
+            if (isError) {
+                msgDiv.classList.add("error-message");
+            }
             this._chatOutput.appendChild(msgDiv);
             this._chatOutput.scrollTop = this._chatOutput.scrollHeight; // Scroll to bottom
         }
@@ -110,58 +132,59 @@
             const message = this._userInput.value.trim();
             if (!message) return;
 
-            this._addMessage("user", `You: ${message}`);
+            this._addMessage("user", message);
             this._userInput.value = "";
-            this._sendButton.disabled = true; // Disable button while sending
+            this._sendButton.disabled = true;
 
             try {
-                // Here's where you would call your actual DocumentDialogue API
-                // Using the properties passed from the builder panel
-                const apiKey = this._props.apiKey;
-                const personaId = this._props.personaId;
-                const extensionId = this._props.extensionId; // Optional
-                const baseUrl = this._props.baseUrl;
-                const maxTokens = this._props.max_tokens;
+                const { apiKey, personaId, extensionId, baseUrl, max_tokens } = this._props;
 
                 if (!apiKey || !personaId || !baseUrl) {
-                    this._addMessage("api", "Error: API Key, Persona ID, or Base URL not configured in widget properties.");
+                    this._addMessage("api", "Error: API Key, Persona ID, or Base URL not configured in widget properties.", true);
                     return;
                 }
 
-                // Example API call (replace with your actual DocumentDialogue API logic)
-                const response = await fetch(`${baseUrl}/your-document-dialogue-endpoint`, {
+                const url = `${baseUrl}/chat`; // Assuming the chat endpoint is /chat or similar
+                const payload = {
+                    personaId: personaId,
+                    question: message, // Assuming your API expects 'question' for user input
+                    ...(extensionId && { extensionId: extensionId }), // Only include if not empty
+                    ...(max_tokens && { maxTokens: max_tokens }) // API might expect maxTokens (camelCase)
+                };
+
+                console.log("Sending API request:", { url, payload });
+
+                const response = await fetch(url, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}` // Or whatever auth your API uses
+                        'Authorization': `Bearer ${apiKey}`
                     },
-                    body: JSON.stringify({
-                        personaId: personaId,
-                        text: message,
-                        // Add other parameters as needed by your API, e.g., maxTokens
-                        ...(extensionId && { extensionId: extensionId }),
-                        ...(maxTokens && { max_tokens: maxTokens })
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`API Error: ${response.status} ${response.statusText} - ${errorText}`);
+                    const errorDetail = await response.text();
+                    console.error("API response error:", response.status, response.statusText, errorDetail);
+                    throw new Error(`API Error: ${response.status} - ${errorDetail || response.statusText}`);
                 }
 
                 const data = await response.json();
-                const apiResponse = data.reply || "No reply from API."; // Adjust based on your API's response structure
-                this._addMessage("api", `AI: ${apiResponse}`);
+                const apiResponse = data.answer || data.reply || "No response received."; // Adjust based on your API's actual response field
+                this._addMessage("api", apiResponse);
 
             } catch (error) {
-                console.error("Error sending message to Document Dialogue API:", error);
-                this._addMessage("api", `Error communicating with API: ${error.message}`);
+                console.error("Error during API call:", error);
+                this._addMessage("api", `Failed to get response: ${error.message}`, true);
             } finally {
-                this._sendButton.disabled = false; // Re-enable button
+                this._sendButton.disabled = false;
             }
         }
     }
 
-    // IMPORTANT: This tag name MUST match the 'tag' property in your manifest.json for the 'main' component!
-    customElements.define("com-sebastian-szallies-documentdialoguewidget-main", DocumentDialogueWidget); // Corrected tag
+    // THIS IS THE CRITICAL LINE FOR THE MAIN WIDGET!
+    // It MUST match the "tag" for "kind": "main" in your manifest.json
+    customElements.define("com-sebastian-szallies-documentdialoguewidget", DocumentDialogueWidget);
+    console.log("Main widget 'com-sebastian-szallies-documentdialoguewidget' defined.");
+
 })();
