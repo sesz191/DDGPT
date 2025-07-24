@@ -1,4 +1,4 @@
-Javascript
+JavaScript
 
 (function () {
   let template = document.createElement("template");
