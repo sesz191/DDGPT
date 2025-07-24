@@ -1,5 +1,3 @@
-JavaScript
-
 (function () {
   let template = document.createElement("template");
   template.innerHTML = `
@@ -10,6 +8,7 @@ JavaScript
       div {
         margin: 50px auto;
         max-width: 600px;
+        font-family: Arial, sans-serif;
       }
 
       /* Style for the input container */
@@ -40,6 +39,10 @@ JavaScript
         cursor: pointer;
         width: 25%;
       }
+      #generate-button:disabled {
+          background-color: #cccccc;
+          cursor: not-allowed;
+      }
 
       /* Style for the generated text area */
       #generated-text {
@@ -48,17 +51,34 @@ JavaScript
         border: 1px solid #ccc;
         border-radius: 5px;
         width:96%;
+        min-height: 150px;
+        resize: vertical;
+      }
+      .loading-spinner {
+          border: 4px solid #f3f3f3;
+          border-top: 4px solid #3cb6a9;
+          border-radius: 50%;
+          width: 20px;
+          height: 20px;
+          animation: spin 1s linear infinite;
+          margin: 10px auto;
+          display: none; /* Initially hidden */
+      }
+      @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
       }
     </style>
     <div>
       <center>
         <img src="https://1000logos.net/wp-content/uploads/2023/02/ChatGPT-Emblem.png" width="200"/>
-        <h1>ChatGPT</h1>
+        <h1>DocumentDialogue Chat</h1>
       </center>
       <div class="input-container">
-        <input type="text" id="prompt-input" placeholder="Enter a prompt">
-        <button id="generate-button">Generate Text</button>
+        <input type="text" id="prompt-input" placeholder="Enter your message">
+        <button id="generate-button">Send Message</button>
       </div>
+      <div class="loading-spinner" id="spinner"></div>
       <textarea id="generated-text" rows="10" cols="50" readonly></textarea>
     </div>
   `;
@@ -70,6 +90,7 @@ JavaScript
       shadowRoot.appendChild(template.content.cloneNode(true));
       this._props = {}; // Initialisiere _props hier
       this._generateButtonListener = null; // Um den Listener zu speichern
+      this._currentChatId = null; // Zum Speichern der aktuellen Chat-ID
     }
 
     // Wird aufgerufen, wenn das Element dem DOM hinzugefügt wird
@@ -85,80 +106,148 @@ JavaScript
     // Wird aufgerufen, nachdem Eigenschaften aktualisiert wurden
     async onCustomWidgetAfterUpdate(changedProperties) {
       // Re-initialisiere nur, wenn relevante Eigenschaften sich geändert haben
-      if (changedProperties.apiKey !== undefined || changedProperties.max_tokens !== undefined) {
+      // oder die chatId noch nicht existiert.
+      if (changedProperties.apiKey !== undefined || 
+          changedProperties.baseUrl !== undefined ||
+          changedProperties.personaId !== undefined ||
+          changedProperties.extensionId !== undefined ||
+          !this._currentChatId // Wenn kein Chat existiert, versuche erneut zu initialisieren
+      ) {
           this.initMain();
       }
     }
 
     async initMain() {
+      const promptInput = this.shadowRoot.getElementById("prompt-input");
       const generatedText = this.shadowRoot.getElementById("generated-text");
-      generatedText.value = "";
-
-      // HIER ERFOLGT DIE ENTSCHEIDENDE ÄNDERUNG:
-      // Lies apiKey und max_tokens aus den übergebenen Properties (this._props)
-      // Die 'default'-Werte in der JSON stellen sicher, dass sie immer definiert sind.
-      const apiKey = this._props.apiKey;
-      const max_tokens = this._props.max_tokens;
-
-
       const generateButton = this.shadowRoot.getElementById("generate-button");
+      const spinner = this.shadowRoot.getElementById("spinner");
+
+      // Setze den Initialzustand der UI
+      generatedText.value = "Welcome! Enter your first message to start a chat.";
+      generateButton.disabled = false;
+      spinner.style.display = 'none';
 
       // Entferne den alten Event Listener, falls vorhanden, um Mehrfachregistrierungen zu verhindern
       if (this._generateButtonListener) {
         generateButton.removeEventListener("click", this._generateButtonListener);
       }
 
-      // Definiere den Event Listener
+      // Definiere den Event Listener für das Senden von Nachrichten
       this._generateButtonListener = async () => {
-        const promptInput = this.shadowRoot.getElementById("prompt-input");
-        const currentGeneratedText = this.shadowRoot.getElementById("generated-text"); // Use a distinct variable
-        currentGeneratedText.value = "Finding result...";
-        const prompt = promptInput.value;
+        const prompt = promptInput.value.trim();
+        if (!prompt) {
+          alert("Please enter a message.");
+          return;
+        }
 
-        // Zusätzliche Validierung für den API Key
-        if (!apiKey || apiKey === "DEFAULT_API_KEY_FROM_JSON_IF_NEEDED") { // Falls du einen Platzhalter in der JSON hast
-            alert("API Key is missing or invalid. Please configure it in the widget properties.");
-            currentGeneratedText.value = "Error: API Key not configured.";
-            // Triggere ein Fehler-Event, falls gewünscht
+        generatedText.value = "Sending message...";
+        generateButton.disabled = true;
+        spinner.style.display = 'block';
+
+        const { apiKey, baseUrl, personaId, extensionId } = this._props;
+
+        if (!apiKey) {
+            alert("API Key is missing. Please configure it in the widget properties.");
+            generatedText.value = "Error: API Key not configured.";
+            generateButton.disabled = false;
+            spinner.style.display = 'none';
+            // Triggere ein Fehler-Event
             this.dispatchEvent(new CustomEvent("onError", { detail: { message: "API Key is missing." } }));
+            return;
+        }
+        if (!baseUrl) {
+            alert("Base URL is missing. Please configure it in the widget properties.");
+            generatedText.value = "Error: Base URL not configured.";
+            generateButton.disabled = false;
+            spinner.style.display = 'none';
+            this.dispatchEvent(new CustomEvent("onError", { detail: { message: "Base URL is missing." } }));
             return;
         }
 
         try {
-          const response = await fetch("https://api.openai.com/v1/completions", {
+          // --- Schritt 1: Chat erstellen, falls noch keine chatId vorhanden ist ---
+          if (!this._currentChatId) {
+            generatedText.value = "Creating new chat session...";
+            const createChatUrl = `${baseUrl}/v1/`;
+            const createChatBody = {};
+            if (personaId) createChatBody.personaId = personaId;
+            if (extensionId) createChatBody.extensionId = extensionId;
+
+            const chatResponse = await fetch(createChatUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${apiKey}`
+              },
+              body: JSON.stringify(createChatBody)
+            });
+
+            if (!chatResponse.ok) {
+              const error = await chatResponse.json();
+              throw new Error(`Failed to create chat: ${error.message || chatResponse.statusText}`);
+            }
+            const chatData = await chatResponse.json();
+            this._currentChatId = chatData.id;
+            generatedText.value += "\nChat session created.";
+            this.dispatchEvent(new CustomEvent("onChatCreated", { detail: { chatId: this._currentChatId } }));
+          }
+
+          // --- Schritt 2: Nachricht senden ---
+          generatedText.value += `\nSending message to chat ${this._currentChatId}...`;
+          const sendMessageUrl = `${baseUrl}/v1/${this._currentChatId}/messages`;
+          const messageBody = {
+            "text": prompt,
+            "persist": true // Optional: Setze auf false, wenn die Nachricht nicht gespeichert werden soll
+          };
+
+          const messageResponse = await fetch(sendMessageUrl, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "Authorization": "Bearer " + apiKey // <-- Verwende den Wert aus den Properties
+              "Authorization": `Bearer ${apiKey}`
             },
-            body: JSON.stringify({
-              "model": "text-davinci-002",
-              "prompt": prompt,
-              "max_tokens": parseInt(max_tokens), // <-- Verwende den Wert aus den Properties
-              "n": 1,
-              "temperature": 0.5
-            })
+            body: JSON.stringify(messageBody)
           });
 
-          if (response.status === 200) {
-            const { choices } = await response.json();
-            const generatedTextValue = choices[0].text;
-            currentGeneratedText.value = generatedTextValue.replace(/^\n+/, '');
-            // Optional: Event auslösen, wenn der Chat erfolgreich erstellt wurde
-            this.dispatchEvent(new CustomEvent("onChatCreated", { detail: { message: "Chat response received." } }));
-          } else {
-            const error = await response.json();
-            alert("OpenAI Response: " + error.error.message);
-            currentGeneratedText.value = "";
-            // Optional: Fehler-Event auslösen
-            this.dispatchEvent(new CustomEvent("onError", { detail: { message: error.error.message } }));
+          if (!messageResponse.ok) {
+            const error = await messageResponse.json();
+            throw new Error(`Failed to send message: ${error.message || messageResponse.statusText}`);
           }
+          const messageData = await messageResponse.json();
+          
+          // --- Schritt 3 (Optional): Alle Nachrichten abrufen, um den gesamten Verlauf anzuzeigen ---
+          const readMessagesUrl = `${baseUrl}/v1/${this._currentChatId}`;
+          const readMessagesResponse = await fetch(readMessagesUrl, {
+            method: "GET",
+            headers: {
+              "Authorization": `Bearer ${apiKey}`
+            }
+          });
+
+          if (!readMessagesResponse.ok) {
+              const error = await readMessagesResponse.json();
+              throw new Error(`Failed to retrieve messages: ${error.message || readMessagesResponse.statusText}`);
+          }
+          const allMessages = await readMessagesResponse.json();
+          
+          // Formatierte Ausgabe des Chat-Verlaufs
+          let chatHistory = "";
+          allMessages.forEach(msg => {
+              chatHistory += `${msg.role.toUpperCase()}: ${msg.content}\n`;
+          });
+          generatedText.value = chatHistory.trim();
+          promptInput.value = ""; // Eingabefeld leeren
+
         } catch (e) {
-            console.error("Fetch error:", e);
-            alert("An error occurred during the API call: " + e.message);
-            currentGeneratedText.value = "Error: Could not connect to API.";
+            console.error("DocumentDialogue API error:", e);
+            alert("DocumentDialogue API Error: " + e.message);
+            generatedText.value = `Error: ${e.message}`;
             // Optional: Fehler-Event auslösen
             this.dispatchEvent(new CustomEvent("onError", { detail: { message: e.message } }));
+        } finally {
+            generateButton.disabled = false;
+            spinner.style.display = 'none';
         }
       };
 
@@ -166,16 +255,69 @@ JavaScript
       generateButton.addEventListener("click", this._generateButtonListener);
     }
 
-    // Die Methode `createChat` aus der Haupt-JSON, falls sie von extern aufgerufen wird
-    createChat() {
-        // Diese Methode wird über die SAC-Skripting-API aufgerufen und könnte dann z.B.
-        // das Klicken des Buttons simulieren oder eine andere Logik starten.
-        // Für den ChatGPT-Anwendungsfall müsstest du überlegen, was "createChat" tun soll.
-        // Wenn es nur "Text generieren" ist, könntest du z.B. den Klick-Event des Buttons auslösen:
-        this.shadowRoot.getElementById("generate-button").click();
-        // Oder direkt die Logik aus dem Event-Listener aufrufen:
-        // this._generateButtonListener(); // Wenn es keine Prompt-Eingabe erfordert
-        this.shadowRoot.getElementById("output-message").textContent = "createChat method called!";
+    // Die Methode createChat aus der Haupt-JSON
+    // Diese Methode kann nun von der SAC-Skripting-API aufgerufen werden,
+    // um einen Chat zu initialisieren oder eine bestimmte Aktion auszulösen.
+    // In diesem Fall würde sie das initiale Erstellen des Chats starten.
+    async createChat() {
+        // Diese Methode könnte direkt die Logik zum Erstellen eines Chats aufrufen
+        // ohne auf eine Benutzereingabe zu warten.
+        const generatedText = this.shadowRoot.getElementById("generated-text");
+        const generateButton = this.shadowRoot.getElementById("generate-button");
+        const spinner = this.shadowRoot.getElementById("spinner");
+
+        if (this._currentChatId) {
+            generatedText.value = "Chat already exists with ID: " + this._currentChatId;
+            return;
+        }
+
+        generatedText.value = "Creating chat via createChat() method...";
+        generateButton.disabled = true;
+        spinner.style.display = 'block';
+
+        const { apiKey, baseUrl, personaId, extensionId } = this._props;
+
+        if (!apiKey || !baseUrl) {
+            alert("API Key or Base URL missing. Please configure them.");
+            generatedText.value = "Error: Configuration missing.";
+            generateButton.disabled = false;
+            spinner.style.display = 'none';
+            this.dispatchEvent(new CustomEvent("onError", { detail: { message: "API Key or Base URL missing." } }));
+            return;
+        }
+
+        try {
+            const createChatUrl = `${baseUrl}/v1/`;
+            const createChatBody = {};
+            if (personaId) createChatBody.personaId = personaId;
+            if (extensionId) createChatBody.extensionId = extensionId;
+
+            const chatResponse = await fetch(createChatUrl, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${apiKey}`
+                },
+                body: JSON.stringify(createChatBody)
+            });
+
+            if (!chatResponse.ok) {
+                const error = await chatResponse.json();
+                throw new Error(`Failed to create chat: ${error.message || chatResponse.statusText}`);
+            }
+            const chatData = await chatResponse.json();
+            this._currentChatId = chatData.id;
+            generatedText.value = "New chat session created with ID: " + this._currentChatId;
+            this.dispatchEvent(new CustomEvent("onChatCreated", { detail: { chatId: this._currentChatId } }));
+        } catch (e) {
+            console.error("Error creating chat:", e);
+            alert("Error creating chat: " + e.message);
+            generatedText.value = `Error creating chat: ${e.message}`;
+            this.dispatchEvent(new CustomEvent("onError", { detail: { message: e.message } }));
+        } finally {
+            generateButton.disabled = false;
+            spinner.style.display = 'none';
+        }
     }
   }
 
