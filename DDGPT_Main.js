@@ -2,104 +2,166 @@
     let template = document.createElement("template");
     template.innerHTML = `
         <style>
-            /* Your builder-specific styles */
-            :host { display: block; padding: 10px; border: 1px solid #ddd; background-color: #f9f9f9; }
-            label { display: block; margin-bottom: 5px; font-weight: bold; }
-            input[type="text"], input[type="number"] {
-                width: 90%;
+            /* Add your actual widget's CSS here */
+            :host {
+                display: block;
+                width: 100%;
+                height: 100%;
+                font-family: Arial, sans-serif;
+                border: 1px solid #eee;
+                box-sizing: border-box;
+            }
+            #container {
+                display: flex;
+                flex-direction: column;
+                height: 100%;
+            }
+            #chat-output {
+                flex-grow: 1;
+                overflow-y: auto;
+                padding: 10px;
+                background-color: #f9f9f9;
+                border-bottom: 1px solid #ddd;
+            }
+            #chat-input-area {
+                padding: 10px;
+                display: flex;
+                gap: 5px;
+            }
+            #user-input {
+                flex-grow: 1;
                 padding: 8px;
-                margin-bottom: 10px;
                 border: 1px solid #ccc;
                 border-radius: 4px;
             }
+            button {
+                padding: 8px 12px;
+                background-color: #007bff;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+            }
+            button:hover {
+                background-color: #0056b3;
+            }
+            .message {
+                margin-bottom: 10px;
+            }
+            .user-message {
+                text-align: right;
+                color: #007bff;
+            }
+            .api-message {
+                text-align: left;
+                color: #333;
+            }
         </style>
-        <div>
-            <h2>Document Dialogue Widget Properties</h2>
-            <label for="api-key-input">API Key:</label>
-            <input type="text" id="api-key-input" placeholder="Enter API Key">
-
-            <label for="persona-id-input">Persona ID:</label>
-            <input type="text" id="persona-id-input" placeholder="Enter Persona ID">
-
-            <label for="extension-id-input">Extension ID:</label>
-            <input type="text" id="extension-id-input" placeholder="Enter Extension ID (Optional)">
-
-            <label for="base-url-input">Base URL:</label>
-            <input type="text" id="base-url-input" placeholder="Enter Base URL">
-
-            <label for="max-tokens-input">Max Tokens:</label>
-            <input type="number" id="max-tokens-input" placeholder="Enter Max Tokens">
+        <div id="container">
+            <div id="chat-output"></div>
+            <div id="chat-input-area">
+                <input type="text" id="user-input" placeholder="Type your message...">
+                <button id="send-button">Send</button>
+            </div>
         </div>
     `;
 
-    class BuilderWidget extends HTMLElement {
+    class DocumentDialogueWidget extends HTMLElement { // Renamed from BuilderWidget
         constructor() {
             super();
             this._shadowRoot = this.attachShadow({ mode: "open" });
             this._shadowRoot.appendChild(template.content.cloneNode(true));
 
-            this._props = {}; // To store the widget properties
-            this._setupEventListeners();
+            this._props = {}; // To store the widget properties (apiKey, personaId etc.)
+            this._chatOutput = this._shadowRoot.getElementById("chat-output");
+            this._userInput = this._shadowRoot.getElementById("user-input");
+            this._sendButton = this._shadowRoot.getElementById("send-button");
+
+            this._sendButton.addEventListener("click", this._sendMessage.bind(this));
+            this._userInput.addEventListener("keypress", (e) => {
+                if (e.key === "Enter") {
+                    this._sendMessage();
+                }
+            });
         }
 
         // This method is called by SAC to pass the current properties of the widget
         onCustomWidgetBeforeUpdate(changedProperties) {
             this._props = { ...this._props, ...changedProperties };
-            this._updateUI();
+            console.log("Main Widget Properties Updated:", this._props);
+            // You might want to re-initialize your chat logic if properties like API key change
         }
 
         // This method is called by SAC after properties are updated
         onCustomWidgetAfterUpdate(changedProperties) {
-            this._updateUI();
+            // No specific UI update needed for the main widget usually, as it reacts to user input
         }
 
-        _setupEventListeners() {
-            const apiKeyInput = this._shadowRoot.getElementById("api-key-input");
-            const personaIdInput = this._shadowRoot.getElementById("persona-id-input");
-            const extensionIdInput = this._shadowRoot.getElementById("extension-id-input");
-            const baseUrlInput = this._shadowRoot.getElementById("base-url-input");
-            const maxTokensInput = this._shadowRoot.getElementById("max-tokens-input");
-
-            apiKeyInput.addEventListener("change", this._onPropertyChange.bind(this, "apiKey"));
-            personaIdInput.addEventListener("change", this._onPropertyChange.bind(this, "personaId"));
-            extensionIdInput.addEventListener("change", this._onPropertyChange.bind(this, "extensionId"));
-            baseUrlInput.addEventListener("change", this._onPropertyChange.bind(this, "baseUrl"));
-            maxTokensInput.addEventListener("change", this._onPropertyChange.bind(this, "max_tokens"));
+        _addMessage(sender, message) {
+            const msgDiv = document.createElement("div");
+            msgDiv.classList.add("message");
+            msgDiv.classList.add(sender === "user" ? "user-message" : "api-message");
+            msgDiv.textContent = message;
+            this._chatOutput.appendChild(msgDiv);
+            this._chatOutput.scrollTop = this._chatOutput.scrollHeight; // Scroll to bottom
         }
 
-        _onPropertyChange(propertyName, event) {
-            let value = event.target.value;
-            // Convert number types if necessary
-            if (propertyName === "max_tokens") {
-                value = parseInt(value, 10);
-                if (isNaN(value)) {
-                    value = this._props[propertyName]; // Revert to old value or default
+        async _sendMessage() {
+            const message = this._userInput.value.trim();
+            if (!message) return;
+
+            this._addMessage("user", `You: ${message}`);
+            this._userInput.value = "";
+            this._sendButton.disabled = true; // Disable button while sending
+
+            try {
+                // Here's where you would call your actual DocumentDialogue API
+                // Using the properties passed from the builder panel
+                const apiKey = this._props.apiKey;
+                const personaId = this._props.personaId;
+                const extensionId = this._props.extensionId; // Optional
+                const baseUrl = this._props.baseUrl;
+                const maxTokens = this._props.max_tokens;
+
+                if (!apiKey || !personaId || !baseUrl) {
+                    this._addMessage("api", "Error: API Key, Persona ID, or Base URL not configured in widget properties.");
+                    return;
                 }
+
+                // Example API call (replace with your actual DocumentDialogue API logic)
+                const response = await fetch(`${baseUrl}/your-document-dialogue-endpoint`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}` // Or whatever auth your API uses
+                    },
+                    body: JSON.stringify({
+                        personaId: personaId,
+                        text: message,
+                        // Add other parameters as needed by your API, e.g., maxTokens
+                        ...(extensionId && { extensionId: extensionId }),
+                        ...(maxTokens && { max_tokens: maxTokens })
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`API Error: ${response.status} ${response.statusText} - ${errorText}`);
+                }
+
+                const data = await response.json();
+                const apiResponse = data.reply || "No reply from API."; // Adjust based on your API's response structure
+                this._addMessage("api", `AI: ${apiResponse}`);
+
+            } catch (error) {
+                console.error("Error sending message to Document Dialogue API:", error);
+                this._addMessage("api", `Error communicating with API: ${error.message}`);
+            } finally {
+                this._sendButton.disabled = false; // Re-enable button
             }
-            this.dispatchEvent(new CustomEvent("propertiesChanged", {
-                detail: {
-                    properties: {
-                        [propertyName]: value
-                    }
-                }
-            }));
-        }
-
-        _updateUI() {
-            const apiKeyInput = this._shadowRoot.getElementById("api-key-input");
-            const personaIdInput = this._shadowRoot.getElementById("persona-id-input");
-            const extensionIdInput = this._shadowRoot.getElementById("extension-id-input");
-            const baseUrlInput = this._shadowRoot.getElementById("base-url-input");
-            const maxTokensInput = this._shadowRoot.getElementById("max-tokens-input");
-
-            if (apiKeyInput) apiKeyInput.value = this._props.apiKey !== undefined ? this._props.apiKey : "";
-            if (personaIdInput) personaIdInput.value = this._props.personaId !== undefined ? this._props.personaId : "";
-            if (extensionIdInput) extensionIdInput.value = this._props.extensionId !== undefined ? this._props.extensionId : "";
-            if (baseUrlInput) baseUrlInput.value = this._props.baseUrl !== undefined ? this._props.baseUrl : "";
-            if (maxTokensInput) maxTokensInput.value = this._props.max_tokens !== undefined ? this._props.max_tokens : "";
         }
     }
 
-    // IMPORTANT: The tag name must match the one in your JSON manifest!
-    customElements.define("com-sebastian-szallies-documentdialoguewidget-builder", BuilderWidget);
+    // IMPORTANT: This tag name MUST match the 'tag' property in your manifest.json for the 'main' component!
+    customElements.define("com-sebastian-szallies-documentdialoguewidget-main", DocumentDialogueWidget); // Corrected tag
 })();
