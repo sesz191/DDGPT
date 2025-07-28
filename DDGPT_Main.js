@@ -1,25 +1,3 @@
-Vielen Dank für die API-Dokumentation! Nach der Analyse wird klar, warum der Fehler auftritt: Die Logik in deinem Widget entspricht nicht dem von der API vorgegebenen Ablauf.
-
-Dein aktueller Code versucht, mit einer einzigen Aktion eine Nachricht zu senden und eine Antwort zu erhalten. Die API erfordert jedoch einen zweistufigen Prozess:
-
-Chat erstellen: Zuerst musst du eine neue Chat-Sitzung erstellen, um eine chatId zu erhalten.
-
-Nachricht senden: Danach kannst du unter Verwendung dieser chatId Nachrichten an die Sitzung senden.
-
-Hauptunterschiede zwischen deinem Code und der API
-Aspekt	Dein aktueller Code (falsch)	Erforderliche API-Logik (richtig)
-API-Ablauf	Ein einziger POST-Aufruf für alles.	1. POST zum Erstellen des Chats (/v1/). 2. POST zum Senden der Nachricht (/v1/{chatId}/messages).
-Endpunkt-URL	.../dd-chat/chat	.../dd-chat/v1/ und .../dd-chat/v1/{chatId}/messages
-Request Payload	{ "question": "..." }	{ "text": "..." }
-Antwort-Feld	Sucht nach data.answer oder data.reply	Muss nach data.content suchen.
-Chat-ID	Wird nicht gespeichert oder verwendet.	Ist essenziell und muss nach der Erstellung gespeichert werden.
-
-In Google Sheets exportieren
-✅ Korrigierter Code für DDGPT_Main.js
-Du musst deine DDGPT_Main.js-Datei erheblich anpassen, um den korrekten API-Ablauf abzubilden. Hier ist der vollständig korrigierte Code. Ersetze den gesamten Inhalt deiner DDGPT_Main.js damit.
-
-JavaScript
-
 (function() {
     let template = document.createElement("template");
     template.innerHTML = `
