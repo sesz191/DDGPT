@@ -105,7 +105,6 @@
     </table>
     <input value="Update Settings" type="submit">
     <br>
-    <p>Developed by <a target="_blank" href="https://linkedin.com/in/itsrohitchouhan">Rohit Chouhan</a></p>
 </form>
 `;
     class ChatGptWidgetBuilderPanel extends HTMLElement {
